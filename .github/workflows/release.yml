@@ -1,0 +1,57 @@
+name: Build & Publish Windows Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release-windows:
+    name: Build Windows x64 Portable Release
+    runs-on: windows-latest
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Install Rust stable toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build optimized release binary
+        run: cargo build --release --locked
+
+      - name: Run integration tests
+        run: cargo test --release --locked
+
+      - name: Package portable ZIP archive
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist_pkg | Out-Null
+          Copy-Item "target/release/ghost_dock.exe" "dist_pkg/ghost_dock.exe"
+          Copy-Item "README.md" "dist_pkg/README.md"
+          Compress-Archive -Path "dist_pkg/*" -DestinationPath "GhostDock-windows-x64.zip" -Force
+
+      - name: Publish to GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "GhostDock ${{ github.ref_name }} — Windows x64 Portable"
+          body: |
+            ### 👻 GhostDock ${{ github.ref_name }} (Windows 10/11 x64)
+
+            Ứng dụng điều khiển ẩn/hiện cửa sổ Windows khỏi `Alt + Tab` & `Taskbar` mà không làm giảm hiệu năng hay đóng băng tiến trình chạy nền.
+
+            #### 📥 Tải về (Downloads)
+            - **`GhostDock-windows-x64.zip`**: Bản nén Portable gồm `ghost_dock.exe` và hướng dẫn sử dụng.
+            - **`ghost_dock.exe`**: File thực thi độc lập duy nhất (tải về chạy ngay, không cần cài đặt).
+
+            *(Được biên dịch và đóng gói tự động trực tiếp từ mã nguồn bởi GitHub Actions).*
+          files: |
+            GhostDock-windows-x64.zip
+            target/release/ghost_dock.exe
