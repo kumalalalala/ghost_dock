@@ -6,6 +6,7 @@ use eframe::egui;
 use ghost_dock::app::GhostDockApp;
 use ghost_dock::icon::render_ghost_dock_rgba;
 use ghost_dock::single_instance::{InstanceAcquisition, acquire_or_wake_existing};
+use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 
 fn build_viewport_icon() -> egui::IconData {
     let size = 64u32;
@@ -22,6 +23,8 @@ fn main() -> eframe::Result {
         InstanceAcquisition::SecondarySignaled => return Ok(()),
     };
 
+    let com_ok = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok() };
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("GhostDock")
@@ -32,9 +35,13 @@ fn main() -> eframe::Result {
     };
 
     let mut guard_slot = Some(instance_guard);
-    eframe::run_native(
+    let res = eframe::run_native(
         "GhostDock",
         options,
         Box::new(move |cc| Ok(Box::new(GhostDockApp::new(cc, guard_slot.take())))),
-    )
+    );
+    if com_ok {
+        unsafe { CoUninitialize() };
+    }
+    res
 }

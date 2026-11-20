@@ -2,28 +2,46 @@
 
 pub mod controller;
 pub mod enumerator;
+pub mod guard;
 pub mod monitors;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE};
 
-/// Strategy used when hiding a window from Alt+Tab and Taskbar.
+/// Strategy used when hiding a window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HideStrategy {
-    /// Remove from Alt+Tab & Taskbar (`WS_EX_TOOLWINDOW`) and push to `HWND_BOTTOM`.
-    /// Window stays `WS_VISIBLE` and un-minimized (`IsIconic == 0`).
-    StealthBackground,
-    /// Same as `StealthBackground`, plus tuck to 1px corner on primary/virtual edge.
+    /// Default: `WS_EX_NOACTIVATE` + `ITaskbarList::DeleteTab` + locked 1px at bottom-right
+    /// monitor corner + real-time `SetWinEventHook` Z-order & Win+D guard.
+    /// Hidden from Desktop, Taskbar, and Alt+Tab while staying pickable in OBS / TikTok (`!WS_EX_TOOLWINDOW`).
     CornerPeek,
+    /// `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` with `LWA_ALPHA = 0` + `DeleteTab` + `HWND_BOTTOM`.
+    /// 100% invisible & click-through even on empty Desktop; compatible with `BitBlt` / `PrintWindow` capture.
+    LayeredGhost,
+    /// `WS_EX_NOACTIVATE` + `DeleteTab` + real-time `HWND_BOTTOM` pin keeping full on-screen bounds.
+    /// 100% compatible with WGC (`Windows.Graphics.Capture`), `BitBlt`, and OBS/TikTok pickers behind active apps.
+    TaskbarCapturable,
+    /// Strict legacy stealth: adds `WS_EX_TOOLWINDOW` + `WS_EX_NOACTIVATE` + `DeleteTab` + `HWND_BOTTOM`.
+    StealthBackground,
     /// Relocate window onto a secondary / virtual (`IddCx`) monitor un-occluded,
-    /// while also removing it from Alt+Tab & Taskbar.
+    /// hiding its Taskbar tab and preventing focus activation while staying pickable in OBS / TikTok.
     SecondaryMonitor,
 }
 
 impl HideStrategy {
+    pub fn hides_from_alt_tab(self) -> bool {
+        matches!(self, Self::StealthBackground)
+    }
+
+    pub fn is_relocated(self) -> bool {
+        matches!(self, Self::CornerPeek | Self::SecondaryMonitor)
+    }
+
     pub fn label(self) -> &'static str {
         match self {
-            Self::StealthBackground => "Stealth",
-            Self::CornerPeek => "Corner 1px",
+            Self::CornerPeek => "1px (Desktop-free)",
+            Self::LayeredGhost => "Ghost (Alpha 0)",
+            Self::TaskbarCapturable => "Live (WGC OK)",
+            Self::StealthBackground => "Stealth (Tool)",
             Self::SecondaryMonitor => "Monitor 2",
         }
     }

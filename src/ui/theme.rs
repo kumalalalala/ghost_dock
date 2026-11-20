@@ -23,6 +23,7 @@ pub const TEXT_MUTED: Color32 = Color32::from_rgb(86, 86, 98); // #565662
 pub const TEXT_DARK: Color32 = Color32::from_rgb(10, 10, 11); // #0A0A0B
 
 pub const DOT_LIVE: Color32 = Color32::from_rgb(52, 211, 153); // #34D399
+pub const DOT_CAPTURABLE: Color32 = Color32::from_rgb(56, 189, 248); // #38BDF8
 pub const DOT_GHOST: Color32 = Color32::from_rgb(251, 191, 36); // #FBBF24
 pub const DOT_MIN: Color32 = Color32::from_rgb(110, 125, 148); // #6E7D94
 pub const BADGE_WARN: Color32 = Color32::from_rgb(248, 113, 113); // #F87171
@@ -216,32 +217,49 @@ pub fn segmented_strategy(
                 ui.spacing_mut().item_spacing.x = 2.0;
                 let items = [
                     (
-                        HideStrategy::StealthBackground,
-                        "Stealth",
-                        true,
-                        "Hide from Alt+Tab & Taskbar, keep live behind windows",
-                    ),
-                    (
                         HideStrategy::CornerPeek,
                         "1px",
+                        30.0,
                         true,
-                        "Hide from Alt+Tab & tuck 1px at monitor corner",
+                        "Hide off Desktop (1px corner behind Taskbar), Alt+Tab off, OBS/TikTok pickable, locked by SetWinEventHook",
+                    ),
+                    (
+                        HideStrategy::LayeredGhost,
+                        "Ghost",
+                        38.0,
+                        true,
+                        "100% invisible & click-through on Desktop (Alpha 0); compatible with BitBlt & PrintWindow",
+                    ),
+                    (
+                        HideStrategy::TaskbarCapturable,
+                        "Live",
+                        32.0,
+                        true,
+                        "Keep full bounds at HWND_BOTTOM for WGC/OBS capture; guarded from Desktop/Win+D & focus steal",
+                    ),
+                    (
+                        HideStrategy::StealthBackground,
+                        "Stealth",
+                        44.0,
+                        true,
+                        "Strict tool-window mode (WS_EX_TOOLWINDOW + HWND_BOTTOM); hides from legacy pickers",
                     ),
                     (
                         HideStrategy::SecondaryMonitor,
                         "Mon2",
+                        36.0,
                         has_mon2,
                         if has_mon2 {
-                            "Move un-occluded to Secondary/Virtual (IddCx) Monitor"
+                            "Move un-occluded to Secondary/Virtual (IddCx) Monitor, Alt+Tab & Taskbar off"
                         } else {
                             "Connect a 2nd or Virtual (IddCx) monitor to enable"
                         },
                     ),
                 ];
 
-                for (strat, text, enabled, tip) in items {
+                for (strat, text, width, enabled, tip) in items {
                     let selected = *current == strat;
-                    let size = Vec2::new(46.0, 20.0);
+                    let size = Vec2::new(width, 20.0);
                     let sense = if enabled { Sense::click() } else { Sense::hover() };
                     let (rect, resp) = ui.allocate_exact_size(size, sense);
                     let resp = if enabled {

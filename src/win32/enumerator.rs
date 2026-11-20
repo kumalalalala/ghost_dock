@@ -180,17 +180,22 @@ fn read_window_text_buf(hwnd: HWND, buf: &mut [u16]) -> String {
     }
 }
 
-fn is_ignored_class_buf(hwnd: HWND, buf: &mut [u16]) -> bool {
+fn classify_window_buf(hwnd: HWND, buf: &mut [u16]) -> (bool, bool) {
     unsafe {
         let len = GetClassNameW(hwnd, buf);
         if len <= 0 {
-            return false;
+            return (false, false);
         }
         let slice = &buf[..len as usize];
-        IGNORED_CLASSES.iter().any(|cls| {
+        let is_stream_timer = {
+            let mut utf16 = "StreamTimerWindowClass".encode_utf16();
+            slice.iter().all(|&c| utf16.next() == Some(c)) && utf16.next().is_none()
+        };
+        let ignored = IGNORED_CLASSES.iter().any(|cls| {
             let mut utf16 = cls.encode_utf16();
             slice.iter().all(|&c| utf16.next() == Some(c)) && utf16.next().is_none()
-        })
+        });
+        (ignored, is_stream_timer)
     }
 }
 
@@ -237,8 +242,13 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
             return BOOL(1);
         }
 
+        let (is_ignored_class, is_stream_timer) = classify_window_buf(hwnd, &mut ctx.class_buf);
+        if is_ignored_class {
+            return BOOL(1);
+        }
+
         let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
-        if managed_strategy.is_none() {
+        if managed_strategy.is_none() && !is_stream_timer {
             if (ex_style & WS_EX_TOOLWINDOW.0) != 0 {
                 return BOOL(1);
             }
@@ -253,10 +263,6 @@ unsafe extern "system" fn enum_window_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
 
         let title = read_window_text_buf(hwnd, &mut ctx.text_buf);
         if title.trim().is_empty() {
-            return BOOL(1);
-        }
-
-        if is_ignored_class_buf(hwnd, &mut ctx.class_buf) {
             return BOOL(1);
         }
 

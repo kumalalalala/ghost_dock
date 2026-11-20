@@ -11,11 +11,14 @@ use ghost_dock::win32::enumerator::{
     ProcessMetaCache, enumerate_window_groups, enumerate_window_groups_cached,
 };
 use ghost_dock::win32::{HideStrategy, WindowState};
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_EXSTYLE, GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindowVisible, SWP_FRAMECHANGED,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SetWindowLongPtrW, SetWindowPos,
-    WS_EX_APPWINDOW, WS_EX_TOOLWINDOW,
+    GW_HWNDNEXT, GWL_EXSTYLE, GetLayeredWindowAttributes, GetWindow, GetWindowLongPtrW,
+    GetWindowRect, IsIconic, IsWindowVisible, IsZoomed, LAYERED_WINDOW_ATTRIBUTES_FLAGS,
+    LWA_ALPHA, SW_MINIMIZE, SW_SHOWMAXIMIZED, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    SWP_NOSIZE, SWP_NOZORDER, SetLayeredWindowAttributes, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TRANSPARENT,
 };
 
 struct ChildGuard(Child);
@@ -221,5 +224,196 @@ fn single_instance_secondary_launch_wakes_primary_instead_of_spawning() {
     match acquire_or_wake_named(&mutex_name, &event_name) {
         InstanceAcquisition::Primary(_) => {}
         InstanceAcquisition::SecondarySignaled => panic!("Lock should be released after drop"),
+    }
+}
+
+#[test]
+fn taskbar_capturable_strategy_preserves_window_capture_flags_and_toggles_cleanly() {
+    let (_child, hwnd_raw) = spawn_real_test_window("GhostDockCapturableTarget");
+    let hwnd = HWND(hwnd_raw as *mut c_void);
+    let mut ctrl = WindowController::default();
+
+    let actual = ctrl
+        .hide_window(hwnd_raw, HideStrategy::TaskbarCapturable)
+        .expect("hide_window TaskbarCapturable");
+    assert_eq!(actual, HideStrategy::TaskbarCapturable);
+
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_eq!(
+            ex & WS_EX_TOOLWINDOW.0,
+            0,
+            "TaskbarCapturable must NOT set WS_EX_TOOLWINDOW so OBS/TikTok pickers see it"
+        );
+        assert!(IsWindowVisible(hwnd).as_bool(), "must stay WS_VISIBLE");
+        assert!(!IsIconic(hwnd).as_bool(), "must NOT become WS_ICONIC");
+    }
+
+    // Periodic guard must not inject WS_EX_TOOLWINDOW under TaskbarCapturable
+    ctrl.enforce_stealth_guards();
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_eq!(ex & WS_EX_TOOLWINDOW.0, 0);
+    }
+
+    // Switching to StealthBackground enables WS_EX_TOOLWINDOW, and switching back clears it
+    ctrl.hide_window(hwnd_raw, HideStrategy::StealthBackground)
+        .expect("switch to StealthBackground");
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_ne!(ex & WS_EX_TOOLWINDOW.0, 0);
+    }
+
+    ctrl.hide_window(hwnd_raw, HideStrategy::TaskbarCapturable)
+        .expect("switch back to TaskbarCapturable");
+    unsafe {
+        let ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        assert_eq!(ex & WS_EX_TOOLWINDOW.0, 0);
+    }
+
+    ctrl.restore_all();
+    assert_eq!(ctrl.hidden_count(), 0);
+}
+
+fn is_hwnd_above(upper: HWND, lower: HWND) -> bool {
+    unsafe {
+        let mut cur = GetWindow(upper, GW_HWNDNEXT).unwrap_or_default();
+        let mut hops = 0;
+        while !cur.is_invalid() && hops < 512 {
+            hops += 1;
+            if cur == lower {
+                return true;
+            }
+            cur = GetWindow(cur, GW_HWNDNEXT).unwrap_or_default();
+        }
+    }
+    false
+}
+
+#[test]
+fn desktop_win_d_restore_zorder_and_layered_ghost_containment() {
+    use ghost_dock::win32::monitors::corner_peek_position;
+    use windows::Win32::UI::WindowsAndMessaging::HWND_TOP;
+
+    let (_c1, hidden_raw) = spawn_real_test_window("GhostDockHiddenDesktopTarget");
+    let (_c2, front_raw) = spawn_real_test_window("GhostDockFrontNormalApp");
+    let hidden = HWND(hidden_raw as *mut c_void);
+    let front = HWND(front_raw as *mut c_void);
+
+    let mut ctrl = WindowController::default();
+
+    // 1. Default CornerPeek hides off Desktop (corner_peek_position), sets WS_EX_NOACTIVATE, keeps !WS_EX_TOOLWINDOW
+    let actual = ctrl
+        .hide_window(hidden_raw, HideStrategy::CornerPeek)
+        .expect("hide_window CornerPeek");
+    assert_eq!(actual, HideStrategy::CornerPeek);
+    let (cx, cy) = corner_peek_position();
+
+    unsafe {
+        let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+        assert_ne!(ex & WS_EX_NOACTIVATE.0, 0, "must set WS_EX_NOACTIVATE");
+        assert_eq!(ex & WS_EX_TOOLWINDOW.0, 0, "CornerPeek must stay OBS/TikTok pickable");
+        let mut r = RECT::default();
+        GetWindowRect(hidden, &mut r).unwrap();
+        assert!((r.left - cx).abs() <= 2 && (r.top - cy).abs() <= 2);
+        assert!(
+            !is_hwnd_above(hidden, front),
+            "hidden window must sit below normal front window"
+        );
+    }
+
+    // 2. Simulate Explorer Win+D minimize + Desktop restore trying to yank window back on-screen and HWND_TOP
+    unsafe {
+        let _ = ShowWindow(hidden, SW_MINIMIZE);
+    }
+    thread::sleep(Duration::from_millis(250));
+    unsafe {
+        let _ = SetWindowPos(hidden, Some(HWND_TOP), 160, 140, 0, 0, SWP_NOSIZE | SWP_NOACTIVATE);
+        let _ = SetWindowLongPtrW(hidden, GWL_EXSTYLE, WS_EX_APPWINDOW.0 as isize);
+    }
+
+    // Give WinEventGuard background thread a brief moment + fallback sweep to enforce containment
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let mut contained = false;
+    while Instant::now() < deadline {
+        ctrl.enforce_stealth_guards();
+        unsafe {
+            let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+            let mut r = RECT::default();
+            GetWindowRect(hidden, &mut r).unwrap();
+            if !IsIconic(hidden).as_bool()
+                && (ex & WS_EX_NOACTIVATE.0) != 0
+                && (ex & WS_EX_APPWINDOW.0) == 0
+                && (r.left - cx).abs() <= 2
+                && (r.top - cy).abs() <= 2
+                && !is_hwnd_above(hidden, front)
+            {
+                contained = true;
+                break;
+            }
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    assert!(
+        contained,
+        "WinEventGuard + controller must keep hidden window off Desktop, un-minimized, non-activating, and below normal apps"
+    );
+
+    // 3. Test LayeredGhost (Alpha 0 + click-through WS_EX_TRANSPARENT) + alpha tamper guard & clean restore
+    let ghost_actual = ctrl
+        .hide_window(hidden_raw, HideStrategy::LayeredGhost)
+        .expect("hide_window LayeredGhost");
+    assert_eq!(ghost_actual, HideStrategy::LayeredGhost);
+    unsafe {
+        let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+        assert_ne!(ex & WS_EX_LAYERED.0, 0);
+        assert_ne!(ex & WS_EX_TRANSPARENT.0, 0);
+        assert_ne!(ex & WS_EX_NOACTIVATE.0, 0);
+        assert_eq!(ex & WS_EX_TOOLWINDOW.0, 0);
+
+        // Simulate target app resetting its own alpha to 255 without changing GWL_EXSTYLE
+        let _ = SetLayeredWindowAttributes(hidden, COLORREF(0), 255, LWA_ALPHA);
+    }
+    ctrl.enforce_stealth_guards();
+    unsafe {
+        let mut alpha: u8 = 255;
+        let mut flags = LAYERED_WINDOW_ATTRIBUTES_FLAGS(0);
+        GetLayeredWindowAttributes(hidden, None, Some(&mut alpha), Some(&mut flags))
+            .expect("GetLayeredWindowAttributes");
+        assert_ne!(flags.0 & LWA_ALPHA.0, 0);
+        assert_eq!(alpha, 0, "guard must reset alpha back to 0 even when GWL_EXSTYLE was unchanged");
+    }
+
+    ctrl.restore_all();
+    assert_eq!(ctrl.hidden_count(), 0);
+    unsafe {
+        let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+        assert_eq!(ex & WS_EX_LAYERED.0, 0, "restore_all must clear added WS_EX_LAYERED");
+        assert_eq!(ex & WS_EX_TRANSPARENT.0, 0);
+        assert_eq!(ex & WS_EX_NOACTIVATE.0, 0);
+    }
+
+    // 4. Maximized window hidden with CornerPeek un-maximizes silently and restores Maximized even with focus=false (Show All)
+    unsafe {
+        let _ = ShowWindow(hidden, SW_SHOWMAXIMIZED);
+    }
+    thread::sleep(Duration::from_millis(80));
+    ctrl.hide_window(hidden_raw, HideStrategy::CornerPeek)
+        .expect("hide zoomed window");
+    unsafe {
+        assert!(!IsZoomed(hidden).as_bool(), "CornerPeek must un-maximize before tucking");
+        let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+        assert_ne!(ex & WS_EX_TRANSPARENT.0, 0, "CornerPeek 1px edge must be click-transparent");
+    }
+    ctrl.show_window(hidden_raw, false)
+        .expect("show_window non-focused");
+    thread::sleep(Duration::from_millis(80));
+    unsafe {
+        assert!(
+            IsZoomed(hidden).as_bool(),
+            "show_window(focus=false) must preserve originally maximized state"
+        );
+        let ex = GetWindowLongPtrW(hidden, GWL_EXSTYLE) as u32;
+        assert_eq!(ex & WS_EX_TRANSPARENT.0, 0);
     }
 }

@@ -17,8 +17,8 @@ use crate::single_instance::{InstanceAcquisition, SingleInstanceGuard, acquire_o
 use crate::tray::{TrayCommand, TrayController};
 use crate::ui::theme::{
     self, BADGE_WARN, BG_CANVAS, BG_SURFACE, BG_SURFACE_HOVER, BG_TRACK, BORDER_HAIRLINE,
-    BORDER_HOVER, DOT_GHOST, DOT_LIVE, DOT_MIN, PillTone, TEXT_MUTED, TEXT_PRIMARY, TEXT_SECONDARY,
-    animated_pill, draw_status_dot, lerp_color, segmented_strategy,
+    BORDER_HOVER, DOT_CAPTURABLE, DOT_GHOST, DOT_LIVE, DOT_MIN, PillTone, TEXT_MUTED,
+    TEXT_PRIMARY, TEXT_SECONDARY, animated_pill, draw_status_dot, lerp_color, segmented_strategy,
 };
 use crate::win32::controller::{
     WindowController, launch_without_occlusion, relaunch_elevated, style_own_window_dark,
@@ -111,7 +111,7 @@ impl GhostDockApp {
             tray: Some(tray),
             single_instance,
             groups,
-            strategy: HideStrategy::StealthBackground,
+            strategy: HideStrategy::CornerPeek,
             monitor_count,
             self_elevated,
             search: String::new(),
@@ -199,10 +199,7 @@ impl GhostDockApp {
             RowAction::Hide(hwnd, strategy) => {
                 match self.controller.hide_window(hwnd, strategy) {
                     Ok(actual) => {
-                        self.set_status(
-                            format!("Hidden from Alt+Tab & Taskbar ({})", actual.label()),
-                            false,
-                        );
+                        self.set_status(format!("Hidden ({})", actual.label()), false);
                     }
                     Err(e) => self.set_status(e, true),
                 }
@@ -259,12 +256,20 @@ impl GhostDockApp {
                 .menu_button(
                     RichText::new("···").size(11.0).color(TEXT_SECONDARY),
                     |ui| {
-                        if ui.button("Hide via Stealth (Alt+Tab off)").clicked() {
-                            actions.push(RowAction::Hide(hwnd, HideStrategy::StealthBackground));
+                        if ui.button("Hide Corner 1px (Desktop-free, OBS OK)").clicked() {
+                            actions.push(RowAction::Hide(hwnd, HideStrategy::CornerPeek));
                             ui.close();
                         }
-                        if ui.button("Hide via Corner 1px").clicked() {
-                            actions.push(RowAction::Hide(hwnd, HideStrategy::CornerPeek));
+                        if ui.button("Hide Invisible (Ghost Alpha 0)").clicked() {
+                            actions.push(RowAction::Hide(hwnd, HideStrategy::LayeredGhost));
+                            ui.close();
+                        }
+                        if ui.button("Hide Background (Live / WGC OK)").clicked() {
+                            actions.push(RowAction::Hide(hwnd, HideStrategy::TaskbarCapturable));
+                            ui.close();
+                        }
+                        if ui.button("Hide Strict Stealth (ToolWindow)").clicked() {
+                            actions.push(RowAction::Hide(hwnd, HideStrategy::StealthBackground));
                             ui.close();
                         }
                         if ui.button("Move to Monitor 2 (Un-occluded)").clicked() {
@@ -311,7 +316,7 @@ impl GhostDockApp {
                 PillTone::AmberGhost,
                 Vec2::new(40.0, 21.0),
             )
-            .on_hover_text("Stealth hide from Alt+Tab & Taskbar (keeps rendering live)")
+            .on_hover_text("Hide via active mode (real-time WinEvent guard against Desktop / Win+D / focus steal)")
             .clicked()
             {
                 actions.push(RowAction::Hide(hwnd, default_strategy));
@@ -511,7 +516,7 @@ impl eframe::App for GhostDockApp {
 
                 // ── Search & Segmented Hide Strategy Bar ──────────────────────
                 ui.horizontal(|ui| {
-                    let strat_reserve = 158.0;
+                    let strat_reserve = 202.0;
                     let search_w = (ui.available_width() - strat_reserve).max(100.0);
                     let search_focused = ctx.memory(|m| m.has_focus(search_id));
                     let focus_t = ctx.animate_bool_with_time(
@@ -619,6 +624,11 @@ impl eframe::App for GhostDockApp {
                                         ui.horizontal(|ui| {
                                             let dot_col = match win.state {
                                                 WindowState::Visible => DOT_LIVE,
+                                                WindowState::StealthHidden(s)
+                                                    if !s.hides_from_alt_tab() =>
+                                                {
+                                                    DOT_CAPTURABLE
+                                                }
                                                 WindowState::StealthHidden(_) => DOT_GHOST,
                                                 WindowState::Minimized => DOT_MIN,
                                             };
@@ -757,6 +767,11 @@ impl eframe::App for GhostDockApp {
                                                 ui.add_space(4.0);
                                                 let dot_col = match win.state {
                                                     WindowState::Visible => DOT_LIVE,
+                                                    WindowState::StealthHidden(s)
+                                                        if !s.hides_from_alt_tab() =>
+                                                    {
+                                                        DOT_CAPTURABLE
+                                                    }
                                                     WindowState::StealthHidden(_) => DOT_GHOST,
                                                     WindowState::Minimized => DOT_MIN,
                                                 };

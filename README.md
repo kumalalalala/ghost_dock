@@ -6,27 +6,35 @@
 
 ## ✨ Tính năng chính (Key Features)
 
-### 1. Ba chế độ ẩn cửa sổ thông minh (3 Non-Throttling Stealth Modes)
+### 1. Năm chế độ ẩn cửa sổ thông minh (5 Non-Throttling Stealth Modes — v0.2.0)
 Khác với thao tác Minimize thông thường (khiến Windows đặt cờ `IsIconic = 1` và ngừng vẽ giao diện / giảm xung tiến trình), **GhostDock** giữ cửa sổ ở trạng thái `WS_VISIBLE` không thu nhỏ nhưng loại bỏ hoàn toàn sự vướng víu trên màn hình:
 
-- **`Stealth` (Stealth Background):** Gỡ cửa sổ khỏi `Alt + Tab` và `Taskbar` (chuyển kiểu sang `WS_EX_TOOLWINDOW`), đồng thời đưa cửa sổ xuống lớp dưới cùng (`HWND_BOTTOM`). Cửa sổ biến mất khỏi khu vực làm việc nhưng tiến trình vẫn chạy như đang mở bình thường.
-- **`Corner 1px` (Corner Peek):** Ẩn khỏi `Alt + Tab` & `Taskbar` đồng thời neo cửa sổ về góc 1 pixel ở mép màn hình, đảm bảo bộ lập lịch DWM của Windows luôn ghi nhận cửa sổ nằm trong vùng hiển thị.
-- **`Monitor 2` (Secondary / Virtual Monitor):** Tự động di chuyển cửa sổ sang màn hình phụ hoặc màn hình ảo (`IddCx`) ở trạng thái mở hoàn toàn không bị che khuất (un-occluded), đồng thời ẩn khỏi `Alt + Tab` và `Taskbar`.
+- **`1px` (`CornerPeek` — Mặc định, Desktop-free & OBS OK):** Gỡ nút Taskbar qua COM `ITaskbarList::DeleteTab`, gắn cờ `WS_EX_NOACTIVATE | WS_EX_TRANSPARENT` (click xuyên qua) và neo gọn 1 pixel ở góc dưới bên phải màn hình mà không bật `WS_EX_TOOLWINDOW`. Cửa sổ biến mất hoàn toàn khỏi cả màn hình Desktop trống, thanh Taskbar và `Alt + Tab`, nhưng **OBS Studio / TikTok Live Studio vẫn nhìn thấy và chọn được trong danh sách Window Capture**.
+- **`Ghost` (`LayeredGhost` — Alpha 0 Invisible):** Đặt lớp trong suốt `WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE` với `LWA_ALPHA = 0`, gỡ nút Taskbar và ghim xuống `HWND_BOTTOM`. Tàng hình 100% và cho phép click xuyên qua ngay cả trên màn hình Desktop trống, tương thích với các trình quay `BitBlt` / `PrintWindow`.
+- **`Live` (`TaskbarCapturable` — WGC OK):** Giữ nguyên kích thước khung hình thực phía sau các cửa sổ đang làm việc (`HWND_BOTTOM` + `WS_EX_NOACTIVATE` + `ITaskbarList::DeleteTab`), tương thích 100% với **Windows Graphics Capture (WGC)**, `BitBlt` và bộ chọn nguồn quay của OBS / TikTok Live Studio.
+- **`Stealth` (`StealthBackground` — Strict ToolWindow):** Chế độ ẩn nghiêm ngặt gắn thêm cờ `WS_EX_TOOLWINDOW` + `WS_EX_NOACTIVATE` + `ITaskbarList::DeleteTab` + `HWND_BOTTOM`.
+- **`Monitor 2` (`SecondaryMonitor`):** Tự động di chuyển cửa sổ sang màn hình phụ hoặc màn hình ảo (`IddCx`) ở trạng thái mở hoàn toàn không bị che khuất (un-occluded), đồng thời ẩn nút Taskbar và khóa chiếm focus.
 
-### 2. Chống giảm hiệu năng trình duyệt chạy ngầm (`No-Occ` / Anti-Occlusion)
+### 2. Động cơ bảo vệ thời gian thực `SetWinEventHook` (`WinEventGuard` — Mới trong v0.2.0)
+- Chạy luồng giám sát sự kiện hệ thống thời gian thực (`EVENT_SYSTEM_FOREGROUND`, `EVENT_SYSTEM_MINIMIZESTART..END`, `EVENT_OBJECT_SHOW..REORDER`, `EVENT_OBJECT_STATECHANGE..LOCATIONCHANGE`, `TaskbarCreated`, `WM_DISPLAYCHANGE`):
+  - **Chống đóng băng khi bấm `Win + D` (Show Desktop):** Tự động đánh thức tức thì các cửa sổ đang ẩn bằng `ShowWindowAsync(SW_SHOWNOACTIVATE)` ngay khi Windows cố thu nhỏ chúng, giữ luồng render/stream không bao giờ bị đứng hình.
+  - **Chống cướp Focus (`Focus-Cascade Bounce`):** Tự động trả focus về cửa sổ làm việc trước đó thông qua `AttachThreadInput` nếu cửa sổ ẩn cố tự nhảy lên tiền cảnh.
+  - **Khóa cứng Z-Order & Tự động thích ứng đa màn hình / Explorer Restart:** Giữ cửa sổ ẩn luôn nằm dưới các cửa sổ bình thường (`HWND_BOTTOM`), tự tính lại tọa độ khi đổi độ phân giải/DPI và tự ẩn lại nút Taskbar nếu `explorer.exe` khởi động lại.
+
+### 3. Chống giảm hiệu năng trình duyệt chạy ngầm (`No-Occ` / Anti-Occlusion)
 - Nút **`No-Occ`** cho phép khởi chạy lại nhanh các trình duyệt/ứng dụng nhân Chromium & Electron kèm bộ cờ vô hiệu hóa cơ chế bóp băng thông cửa sổ bị che khuất:
   `--disable-features=CalculateNativeWinOcclusion --disable-backgrounding-occluded-windows --disable-renderer-backgrounding`
 - Giúp WebGL, Canvas, WebRTC, hoặc các tác vụ tự động hóa trên trình duyệt luôn chạy ở tốc độ tối đa ngay cả khi bị cửa sổ khác đè lên.
 
-### 3. Khay hệ thống & Phím tắt toàn cục (System Tray & Global Hotkey)
+### 4. Khay hệ thống & Phím tắt toàn cục (System Tray & Global Hotkey)
 - Chạy ngầm gọn nhẹ dưới khay hệ thống (System Tray) với giao diện Dark Mode chuẩn DWM (`#0B0B0C`).
 - Bấm tổ hợp phím **`Ctrl + Shift + Space`** ở bất kỳ đâu (hoặc nhấp chuột trái vào biểu tượng dưới khay hệ thống) để bật/tắt tức thì bảng điều khiển GhostDock.
 
-### 4. Cơ chế chống mồ côi cửa sổ (Zero-Orphan Automatic Restore)
+### 5. Cơ chế chống mồ côi cửa sổ (Zero-Orphan Automatic Restore)
 - Lưu trữ chính xác tọa độ gốc (`RECT`), trạng thái phóng to (`IsZoomed`) và cờ hiển thị (`GWL_EXSTYLE`) của từng cửa sổ.
 - Khi bấm **`Restore All`** hoặc thoát chương trình (**`Quit (Restore All)`**), toàn bộ cửa sổ đang ẩn sẽ tự động trở về nguyên trạng ban đầu 100%, không bao giờ để sót cửa sổ bị ẩn ngầm.
 
-### 5. Gom nhóm theo tiến trình & Hỗ trợ nâng quyền Admin (Process Grouping & Elevation)
+### 6. Gom nhóm theo tiến trình & Hỗ trợ nâng quyền Admin (Process Grouping & Elevation)
 - Tự động gom các cửa sổ theo tiến trình sở hữu (`.exe` / `PID`) kèm bộ đệm metadata tối ưu (`ProcessMetaCache`) không gây tốn CPU.
 - Hỗ trợ lọc/tìm kiếm tức thì theo tên cửa sổ hoặc tên file thực thi, ẩn/hiện hàng loạt cửa sổ của cùng một ứng dụng chỉ với 1 cú nhấp (`Hide all` / `Show all`).
 - Tự động phát hiện các cửa sổ chạy quyền Administrator (`ADMIN` badge) và cung cấp nút **`Elevate`** nâng quyền UAC trực tiếp, đồng bộ khóa đơn phiên (`Single-Instance Lock`) an toàn qua biên giới quyền UIPI.
@@ -37,7 +45,7 @@ Khác với thao tác Minimize thông thường (khiến Windows đặt cờ `Is
 
 ### Cách 1: Tải bản thực thi đóng gói sẵn (Khuyên dùng cho người dùng cuối)
 1. Truy cập mục **[Releases](../../releases/latest)** ở cột bên phải của repository.
-2. Tải gói **`GhostDock-v0.1.0-windows-x64.zip`** (hoặc `ghost_dock.exe`).
+2. Tải gói **`GhostDock-windows-x64.zip`** (hoặc `ghost_dock.exe`).
 3. Giải nén và chạy trực tiếp `ghost_dock.exe` (Portable 1 file duy nhất, không cần cài đặt).
 
 ### Cách 2: Tự biên dịch từ mã nguồn (Build from Source)
@@ -76,8 +84,9 @@ ghost_dock/
 │   │   ├── mod.rs
 │   │   └── theme.rs           # Hệ thống màu sắc Obsidian Dark, nút pill chuyển động mượt
 │   └── win32/
-│       ├── mod.rs             # Định nghĩa HideStrategy, WindowState, ProcessGroup
+│       ├── mod.rs             # Định nghĩa 5 chế độ HideStrategy, WindowState, ProcessGroup
 │       ├── controller.rs      # Lõi điều khiển HWND, ẩn/khôi phục cửa sổ, DWM dark mode, No-Occlusion
+│       ├── guard.rs           # Động cơ SetWinEventHook thời gian thực chống Win+D, focus cascade & Explorer restart
 │       ├── enumerator.rs      # Liệt kê cửa sổ chuẩn Alt+Tab với ProcessMetaCache theo PID
 │       └── monitors.rs        # Nhận diện đa màn hình & tính toán vị trí Corner 1px / Monitor 2
 └── tests/
